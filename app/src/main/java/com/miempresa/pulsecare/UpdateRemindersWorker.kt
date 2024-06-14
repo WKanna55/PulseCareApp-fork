@@ -15,6 +15,7 @@ class UpdateRemindersWorker(context: Context, params: WorkerParameters): Worker(
 
         repository.fetchAllReminders { reminders ->
             reminders.forEach { reminder ->
+                //var remTimeMaxWait = reminder.reminderTime + 240000 // suma 4 min
                 if (reminder.reminderTime < currentTime && reminder.repeatDays.isNotEmpty()) {
                     val nextReminderTime = calculateNextReminderTime(reminder, currentTime)
                     if (nextReminderTime != null) {

@@ -1,24 +1,23 @@
 package com.miempresa.pulsecare
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import android.util.Log
 import android.widget.ImageButton
 import android.widget.TextView
-import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
+import androidx.annotation.RequiresApi
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
-import com.google.firebase.database.DataSnapshot
-import com.google.firebase.database.DatabaseError
-import com.google.firebase.database.DatabaseReference
-import com.google.firebase.database.FirebaseDatabase
-import com.google.firebase.database.ValueEventListener
+import com.google.firebase.database.*
 import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.concurrent.TimeUnit
+import java.util.*
 
 class MainActivity : AppCompatActivity() {
 
@@ -28,6 +27,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var closestReminderTextView: TextView
     private lateinit var addReminderButton: ImageButton
 
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val foregroundServiceGranted = permissions[Manifest.permission.FOREGROUND_SERVICE_LOCATION] ?: true
+        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: true
+        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: true
+
+        if (foregroundServiceGranted && (fineLocationGranted || coarseLocationGranted)) {
+            startUpdateRemindersService()
+        } else {
+            Toast.makeText(this, "Se requieren permisos de ubicación para el servicio en primer plano.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -44,7 +58,8 @@ class MainActivity : AppCompatActivity() {
 
         // Inicializar controlador
         reminderController = ReminderController(this)
-        reminderController.fetchAllReminders  { remindersList -> remindersAdapter.setData(remindersList)
+        reminderController.fetchAllReminders { remindersList ->
+            remindersAdapter.setData(remindersList)
             updateClosestReminder(remindersList)
         }
 
@@ -54,17 +69,18 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-        // Programar el Worker para que se ejecute diariamente
-        val updateRemindersRequest = PeriodicWorkRequestBuilder<UpdateRemindersWorker>(1, TimeUnit.MILLISECONDS).build()
-        WorkManager.getInstance(this).enqueue(updateRemindersRequest)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissionsIfNecessary()
+        } else {
+            startUpdateRemindersService()
+        }
 
         // Escuchar cambios en el campo 'state' de 'closestReminders'
         listenForStateChanges()
     }
 
-
     private fun deleteReminder(reminder: Reminder) {
-        reminderController.deleteReminder(reminder) {success ->
+        reminderController.deleteReminder(reminder) { success ->
             if (success) {
                 remindersAdapter.removeReminder(reminder)
                 Toast.makeText(this, "Recordatorio eliminado exitosamente", Toast.LENGTH_SHORT).show()
@@ -147,7 +163,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "Current pills count: $currentPillsCount") // Añadido para depuración
 
                 if (currentPillsCount != null) {
-                    val  newPillsCount = currentPillsCount - 1
+                    val newPillsCount = currentPillsCount - 1
                     Log.d(TAG, "New pills count: $newPillsCount") // Log para depuración
 
                     reminderReference.child("pills").setValue(newPillsCount)
@@ -166,7 +182,7 @@ class MainActivity : AppCompatActivity() {
             override fun onCancelled(error: DatabaseError) {
                 Log.w(TAG, "Error al leer la cantidad de píldoras", error.toException())
             }
-        } )
+        })
     }
 
     private fun showMedicationConfirmedNotification() {
@@ -179,5 +195,31 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+    }
+
+    private fun requestPermissionsIfNecessary() {
+        val permissionsToRequest = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            permissionsToRequest.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+        if (permissionsToRequest.isNotEmpty()) {
+            requestPermissionLauncher.launch(permissionsToRequest.toTypedArray())
+        } else {
+            startUpdateRemindersService()
+        }
+    }
+
+    private fun startUpdateRemindersService() {
+        val serviceIntent = Intent(this, UpdateRemindersService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
     }
 }
